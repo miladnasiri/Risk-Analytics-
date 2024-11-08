@@ -1,0 +1,450 @@
+
+import os
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+import plotly.express as px
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import joblib
+from datetime import datetime, timedelta
+import json
+import subprocess
+
+class RiskAnalyticsProject:
+    def __init__(self, base_path):
+        self.base_path = base_path
+        self.data_path = os.path.join(base_path, 'data')
+        self.models_path = os.path.join(base_path, 'models')
+        self.viz_path = os.path.join(base_path, 'visualizations')
+        self.config_path = os.path.join(base_path, 'config')
+        self.src_path = os.path.join(base_path, 'src')
+        self.images_path = os.path.join(base_path, 'images')
+        
+    def create_project_structure(self):
+        """Create project directory structure"""
+        directories = [
+            self.data_path,
+            self.models_path,
+            self.viz_path,
+            self.config_path,
+            self.src_path,
+            self.images_path
+        ]
+        
+        for directory in directories:
+            os.makedirs(directory, exist_ok=True)
+            
+        print("Project structure created successfully!")
+    
+    def generate_sample_data(self):
+        """Generate synthetic financial data"""
+        np.random.seed(42)
+        n_samples = 10000
+        
+        # Generate dates for the last year
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365)
+        dates = pd.date_range(start=start_date, end=end_date, periods=n_samples)
+        
+        data = {
+            'transaction_id': range(n_samples),
+            'date': dates,
+            'amount': np.random.lognormal(mean=4, sigma=1, size=n_samples),
+            'transaction_count': np.random.poisson(lam=5, size=n_samples),
+            'average_transaction_value': np.random.lognormal(mean=3.5, sigma=0.8, size=n_samples),
+            'customer_tenure_days': np.random.randint(1, 3650, size=n_samples),
+            'credit_score': np.random.normal(700, 50, size=n_samples).clip(300, 850),
+            'payment_frequency': np.random.choice(['weekly', 'monthly', 'quarterly'], size=n_samples),
+            'industry_sector': np.random.choice(['tech', 'retail', 'manufacturing', 'services'], size=n_samples),
+            'geographical_region': np.random.choice(['North', 'South', 'East', 'West'], size=n_samples)
+        }
+        
+        df = pd.DataFrame(data)
+        
+        # Generate risk indicators
+        df['amount_volatility'] = np.random.normal(0, 1, size=n_samples)
+        df['payment_delay_days'] = np.random.exponential(5, size=n_samples)
+        df['compliance_score'] = np.random.normal(85, 10, size=n_samples).clip(0, 100)
+        
+        # Create risk label
+        risk_conditions = (
+            (df['amount_volatility'] > df['amount_volatility'].quantile(0.9)) |
+            (df['payment_delay_days'] > df['payment_delay_days'].quantile(0.9)) |
+            (df['compliance_score'] < df['compliance_score'].quantile(0.1))
+        )
+        df['risk_label'] = risk_conditions.astype(int)
+        
+        # Add derived features
+        df['month'] = df['date'].dt.month
+        df['day_of_week'] = df['date'].dt.dayofweek
+        df['is_month_end'] = df['date'].dt.is_month_end.astype(int)
+        
+        # Save data
+        df.to_csv(os.path.join(self.data_path, 'risk_data.csv'), index=False)
+        print("Sample data generated successfully!")
+        return df
+    
+    def create_visualizations(self, df):
+        """Create all visualizations"""
+        # 1. Risk Distribution Pie Chart
+        risk_dist = df['risk_label'].value_counts()
+        fig_pie = go.Figure(data=[go.Pie(
+            labels=['Low Risk', 'High Risk'],
+            values=[risk_dist[0], risk_dist[1]],
+            marker=dict(colors=['green', 'red'])
+        )])
+        fig_pie.update_layout(title='Risk Distribution')
+        fig_pie.write_html(os.path.join(self.viz_path, 'risk_distribution.html'))
+        
+        # 2. Industry Risk Analysis
+        fig_industry = make_subplots(rows=2, cols=1,
+                                   subplot_titles=('Risk by Industry', 'Average Amount by Industry'))
+        
+        industry_risk = df.groupby('industry_sector')['risk_label'].mean()
+        fig_industry.add_trace(
+            go.Bar(x=industry_risk.index, y=industry_risk.values, 
+                  marker_color='orange', name='Risk Level'),
+            row=1, col=1
+        )
+        
+        industry_amount = df.groupby('industry_sector')['amount'].mean()
+        fig_industry.add_trace(
+            go.Bar(x=industry_amount.index, y=industry_amount.values,
+                  marker_color='blue', name='Avg Amount'),
+            row=2, col=1
+        )
+        
+        fig_industry.update_layout(height=800, title_text="Industry Analysis")
+        fig_industry.write_html(os.path.join(self.viz_path, 'industry_analysis.html'))
+        
+        # 3. Compliance Dashboard
+        fig_compliance = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Compliance Score Distribution',
+                'Compliance vs Risk',
+                'Compliance by Industry',
+                'Payment Delays Distribution'
+            )
+        )
+        
+        fig_compliance.add_trace(
+            go.Histogram(x=df['compliance_score'], nbinsx=30,
+                        marker_color='green', name='Compliance'),
+            row=1, col=1
+        )
+        
+        fig_compliance.add_trace(
+            go.Scatter(x=df['compliance_score'], y=df['risk_label'],
+                      mode='markers', marker=dict(color='red'),
+                      name='Risk vs Compliance'),
+            row=1, col=2
+        )
+        
+        industry_compliance = df.groupby('industry_sector')['compliance_score'].mean()
+        fig_compliance.add_trace(
+            go.Bar(x=industry_compliance.index, y=industry_compliance.values,
+                  marker_color='blue', name='Industry Compliance'),
+            row=2, col=1
+        )
+        
+        fig_compliance.add_trace(
+            go.Histogram(x=df['payment_delay_days'], nbinsx=30,
+                        marker_color='orange', name='Payment Delays'),
+            row=2, col=2
+        )
+        
+        fig_compliance.update_layout(height=800, title_text="Compliance Analysis")
+        fig_compliance.write_html(os.path.join(self.viz_path, 'compliance_dashboard.html'))
+
+
+
+
+
+
+        
+        # 4. Temporal Analysis
+        fig_temporal = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Daily Risk Trend',
+                'Risk by Day of Week',
+                'Month-End vs Regular Days',
+                'Monthly Risk Pattern'
+            )
+        )
+        
+        daily_risk = df.groupby('date')['risk_label'].mean().reset_index()
+        fig_temporal.add_trace(
+            go.Scatter(x=daily_risk['date'], y=daily_risk['risk_label'],
+                      mode='lines', name='Daily Risk'),
+            row=1, col=1
+        )
+        
+        dow_risk = df.groupby('day_of_week')['risk_label'].mean()
+        fig_temporal.add_trace(
+            go.Bar(x=['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                  y=dow_risk.values, marker_color='green', name='Day Risk'),
+            row=1, col=2
+        )
+        
+        month_end_risk = df.groupby('is_month_end')['risk_label'].mean()
+        fig_temporal.add_trace(
+            go.Bar(x=['Regular Days', 'Month End'],
+                  y=month_end_risk.values, marker_color='red',
+                  name='Month End Risk'),
+            row=2, col=1
+        )
+        
+        monthly_risk = df.groupby('month')['risk_label'].mean()
+        fig_temporal.add_trace(
+            go.Scatter(x=list(range(1, 13)), y=monthly_risk.values,
+                      mode='lines+markers', name='Monthly Pattern'),
+            row=2, col=2
+        )
+        
+        fig_temporal.update_layout(height=800, title_text="Temporal Risk Analysis")
+        fig_temporal.write_html(os.path.join(self.viz_path, 'temporal_analysis.html'))
+        
+        # 5. Transaction Analysis
+        fig_transaction = make_subplots(
+            rows=2, cols=2,
+            subplot_titles=(
+                'Transaction Amount Distribution',
+                'Amount vs Risk',
+                'Transaction Count Distribution',
+                'High Risk Transactions'
+            )
+        )
+        
+        fig_transaction.add_trace(
+            go.Histogram(x=df['amount'], nbinsx=50,
+                        marker_color='blue', name='Amounts'),
+            row=1, col=1
+        )
+        
+        fig_transaction.add_trace(
+            go.Box(x=df['risk_label'].astype(str), y=df['amount'],
+                  name='Amount by Risk'),
+            row=1, col=2
+        )
+        
+        fig_transaction.add_trace(
+            go.Histogram(x=df['transaction_count'], nbinsx=30,
+                        marker_color='green', name='Transaction Count'),
+            row=2, col=1
+        )
+        
+        high_risk = df[df['risk_label'] == 1]
+        fig_transaction.add_trace(
+            go.Scatter(x=high_risk['amount'], y=high_risk['compliance_score'],
+                      mode='markers', marker=dict(color='red'),
+                      name='High Risk'),
+            row=2, col=2
+        )
+        
+        fig_transaction.update_layout(height=800, title_text="Transaction Analysis")
+        fig_transaction.write_html(os.path.join(self.viz_path, 'transaction_analysis.html'))
+        
+        print("Visualizations created successfully!")
+    
+    def train_risk_model(self, df):
+        """Train and save risk prediction model"""
+        # Prepare features
+        feature_cols = ['amount', 'transaction_count', 'average_transaction_value',
+                       'customer_tenure_days', 'credit_score', 'amount_volatility',
+                       'payment_delay_days', 'compliance_score']
+        
+        X = df[feature_cols]
+        y = df['risk_label']
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+        
+        # Scale features
+        scaler = StandardScaler()
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_test_scaled = scaler.transform(X_test)
+        
+        # Train model
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train_scaled, y_train)
+        
+        # Save model and scaler
+        joblib.dump(model, os.path.join(self.models_path, 'risk_classifier.joblib'))
+        joblib.dump(scaler, os.path.join(self.models_path, 'scaler.joblib'))
+        
+        print("Model trained and saved successfully!")
+    
+    def create_config(self):
+        """Create configuration file"""
+        config = {
+            'data_params': {
+                'train_size': 0.8,
+                'random_state': 42,
+                'n_samples': 10000
+            },
+            'model_params': {
+                'risk_threshold': 0.75,
+                'n_estimators': 100,
+                'max_depth': 10
+            },
+            'paths': {
+                'data_dir': 'data',
+                'models_dir': 'models',
+                'viz_dir': 'visualizations'
+            }
+        }
+        
+        with open(os.path.join(self.config_path, 'config.json'), 'w') as f:
+            json.dump(config, f, indent=4)
+            
+        print("Configuration file created successfully!")
+    
+    def create_readme(self):
+        """Create README.md file"""
+        readme_content = """# Risk Analytics Project
+
+## Overview
+This project implements a comprehensive risk analytics system for financial data analysis and monitoring. It demonstrates advanced data science capabilities in risk management and business intelligence.
+
+## Features
+- Risk pattern detection and monitoring
+- Interactive dashboards for risk analysis
+- Compliance tracking system
+- Transaction pattern analysis
+- Temporal risk analysis
+- Industry-specific risk monitoring
+
+## Project Structure
+```
+risk-analytics/
+├── data/               # Dataset storage
+├── models/            # Trained models
+├── visualizations/    # Interactive dashboards
+├── src/              # Source code
+├── config/           # Configuration files
+└── images/           # Visualization images
+```
+
+## Visualizations
+1. Risk Distribution Dashboard
+2. Industry Risk Analysis
+3. Compliance Monitoring Dashboard
+4. Temporal Risk Patterns
+5. Transaction Analysis
+
+## Setup and Installation
+1. Clone the repository
+2. Install requirements: `pip install -r requirements.txt`
+3. Run the main script: `python main.py`
+
+## Technologies Used
+- Python 3.10
+- Pandas & NumPy for data processing
+- Scikit-learn for machine learning
+- Plotly for interactive visualizations
+- Joblib for model persistence
+
+## License
+MIT License
+"""
+        
+        with open(os.path.join(self.base_path, 'README.md'), 'w') as f:
+            f.write(readme_content)
+            
+        print("README.md created successfully!")
+    
+    def create_requirements(self):
+        """Create requirements.txt"""
+        requirements = [
+            'pandas==1.5.3',
+            'numpy==1.24.3',
+            'scikit-learn==1.2.2',
+            'plotly==5.13.1',
+            'joblib==1.2.0'
+        ]
+        
+        with open(os.path.join(self.base_path, 'requirements.txt'), 'w') as f:
+            f.write('\n'.join(requirements))
+            
+        print("Requirements file created successfully!")
+    
+    def initialize_git(self):
+        """Initialize git repository and create .gitignore"""
+        # Create .gitignore
+        gitignore_content = """
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+.DS_Store
+"""
+        
+        with open(os.path.join(self.base_path, '.gitignore'), 'w') as f:
+            f.write(gitignore_content)
+        
+        # Initialize git
+        commands = [
+            ['git', 'init'],
+            ['git', 'add', '.'],
+            ['git', 'commit', '-m', "Initial commit: Risk Analytics Project"],
+        ]
+        
+        for command in commands:
+            subprocess.run(command, cwd=self.base_path)
+            
+        print("Git repository initialized successfully!")
+        
+    def setup_project(self):
+        """Run complete project setup"""
+        print("\nStarting project setup...")
+        
+        # Create project structure
+        self.create_project_structure()
+        
+        # Generate sample data
+        df = self.generate_sample_data()
+        
+        # Create visualizations
+        self.create_visualizations(df)
+        
+        # Train and save model
+        self.train_risk_model(df)
+        
+        # Create configuration
+        self.create_config()
+        
+        # Create documentation
+        self.create_readme()
+        
+        # Create requirements
+        self.create_requirements()
+        
+        # Initialize git
+        self.initialize_git()
+        
+        print("\nProject setup completed successfully!")
+        print("\nNext steps:")
+        print("1. Create a new repository on GitHub")
+        print("2. Add remote repository:")
+        print("   git remote add origin <your-repo-url>")
+        print("3. Push to GitHub:")
+        print("   git push -u origin main")
+
+def main():
+    # Set up project in your specified directory
+    project = RiskAnalyticsProject('/home/milad/Desktop/risk')
+    project.setup_project()
+
+if __name__ == "__main__":
+    main()
+
